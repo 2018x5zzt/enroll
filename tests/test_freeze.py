@@ -226,24 +226,29 @@ class FreezeTest(unittest.TestCase):
             claim(api, "excalidraw", issue=7)
             api.variables[FULL]["CLAIMED_AT"]["value"] = "2026-12-03 10:00"
 
-        def claimed_after_the_deadline(api):
-            api.now = DEADLINE + timedelta(seconds=30)
-            claim(api, "excalidraw", now=DEADLINE - timedelta(seconds=30), issue=7)
+        api = FakeGitHub()
+        broken_claimed_at(api)
+        claim(api, "obsidian", BOB, issue=8)
+        issues = FakeIssues()
+        with self.assertRaises(ValueError) as failure:
+            sweep(api, issues=issues)
+        self.assertFalse(api.repos[FULL]["archived"])
+        self.assertEqual(recorded(api), {})
+        self.assertTrue(api.repos["org/app-obsidian-bob"]["archived"])
+        self.assertEqual(list(issues.comments), [8])
+        self.assertIn("https://github.com/org/app-excalidraw-alice", str(failure.exception))
 
-        for start in (broken_claimed_at, claimed_after_the_deadline):
-            with self.subTest(case=start.__name__):
-                api = FakeGitHub()
-                start(api)
-                api.now = CONTEST_TIME
-                claim(api, "obsidian", BOB, issue=8)
-                issues = FakeIssues()
-                with self.assertRaises(ValueError) as failure:
-                    sweep(api, issues=issues)
-                self.assertFalse(api.repos[FULL]["archived"])
-                self.assertEqual(recorded(api), {})
-                self.assertTrue(api.repos["org/app-obsidian-bob"]["archived"])
-                self.assertEqual(list(issues.comments), [8])
-                self.assertIn("https://github.com/org/app-excalidraw-alice", str(failure.exception))
+    def test_claim_whose_repository_was_made_after_the_deadline_is_not_an_entry(self):
+        api = FakeGitHub()
+        api.now = DEADLINE + timedelta(seconds=30)
+        claim(api, "excalidraw", now=DEADLINE - timedelta(seconds=30), issue=7)
+        api.now = CONTEST_TIME
+        claim(api, "obsidian", BOB, issue=8)
+        issues = sweep(api)
+        self.assertFalse(api.repos[FULL]["archived"])
+        self.assertEqual(recorded(api), {})
+        self.assertTrue(api.repos["org/app-obsidian-bob"]["archived"])
+        self.assertEqual(list(issues.comments), [8])
 
     def test_scheduled_run_freezes_once_the_clock_passes_the_deadline(self):
         for now, archived in [(DEADLINE, False), (LATE, True)]:

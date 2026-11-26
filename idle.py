@@ -13,7 +13,7 @@ def pushed(api, full, player, since):
     """Whether the player has pushed to any branch at or after `since`, by GitHub's own record of the repository's ref updates."""
     activity = api.get(f"repos/{full}/activity?direction=desc&per_page=100")
     recent = [entry for entry in activity if projects.moment(entry["timestamp"]) >= since]
-    # The endpoint pages by cursor, which the client does not follow; a full page of recent activity may hide the player's push.
+    # Only the newest page is read, so a full page of recent activity may hide the player's push.
     return len(recent) >= 100 or any(str((entry.get("actor") or {}).get("id")) == player for entry in recent)
 
 

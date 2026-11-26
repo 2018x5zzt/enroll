@@ -1,6 +1,7 @@
 """Minimal GitHub REST client: retries, rate limits and visibility delays."""
 
 import json
+import re
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -24,6 +25,10 @@ class GitHub:
         self.sleep = sleep
 
     def request(self, method, path, body=None, missing_ok=False):
+        return self.exchange(method, path, body, missing_ok)[0]
+
+    def exchange(self, method, path, body=None, missing_ok=False):
+        """Send a request; return its decoded body and the response headers."""
         data = None if body is None else json.dumps(body).encode()
         for attempt in range(ATTEMPTS):
             last = attempt == ATTEMPTS - 1
@@ -36,11 +41,11 @@ class GitHub:
             try:
                 with urlopen(request, timeout=30) as response:
                     text = response.read().decode()
-                    return json.loads(text) if text else None
+                    return (json.loads(text) if text else None), response.headers
             except HTTPError as error:
                 text = error.read().decode(errors="replace")
                 if error.code == 404 and missing_ok:
-                    return None
+                    return None, error.headers
                 delay = retry_delay(error, attempt)
                 if delay is None or last:
                     raise ApiError(method, path, error.code, text) from None
@@ -75,6 +80,21 @@ class GitHub:
             if len(items) < 100:
                 return
             page += 1
+
+    def cursor_pages(self, path):
+        """Yield every item of a list that pages by cursor, like repos/<repo>/activity, which ignores page=:
+        each response's Link header carries the URL of the next page."""
+        sep = "&" if "?" in path else "?"
+        path = f"{path}{sep}per_page=100"
+        while path:
+            items, headers = self.exchange("GET", path)
+            yield from items
+            path = next_page(headers.get("Link"))
+
+
+def next_page(link):
+    match = re.search(r'<([^>]*)>;\s*rel="next"', link or "")
+    return match[1].removeprefix(API + "/") if match else None
 
 
 def retry_delay(error, attempt):

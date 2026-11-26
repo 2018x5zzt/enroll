@@ -2,6 +2,7 @@ import contextlib
 import io
 import os
 import sys
+import tempfile
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -74,6 +75,19 @@ def claimed():
     api = FakeGitHub()
     claim(api, "excalidraw", issue=7)
     return api
+
+
+def rows(output):
+    return [line for line in output.splitlines() if "https://github.com/org/app-" in line]
+
+
+def rehearsal(api, now, window, catalog=CATALOG):
+    """A manual run with dry_run left on; return the comments, the log and the step summary."""
+    with tempfile.TemporaryDirectory() as folder:
+        summary = Path(folder) / "summary.md"
+        issues, log = workflow_run(api, now, "workflow_dispatch", catalog=catalog, WINDOW=window, DRY_RUN="true",
+                                   GITHUB_STEP_SUMMARY=str(summary))
+        return issues, log, summary.read_text(encoding="utf-8")
 
 
 class FreezeTest(unittest.TestCase):
@@ -237,6 +251,70 @@ class FreezeTest(unittest.TestCase):
                 api = claimed()
                 workflow_run(api, now)
                 self.assertEqual(api.repos[FULL]["archived"], archived)
+
+
+class RehearsalTest(unittest.TestCase):
+    def test_dry_run_prints_a_row_per_entry_and_changes_nothing(self):
+        api = claimed()
+        claim(api, "obsidian", BOB, issue=8)
+        update(api, FULL, ALICE, "final", CONTEST_TIME + timedelta(hours=1))
+        before = state(api)
+        issues, log, summary = rehearsal(api, LATE, "contest")
+        self.assertEqual((state(api), issues.comments), (before, {}))
+        expected = [("https://github.com/org/app-excalidraw-alice", "alice", "excalidraw", "final",
+                     github_time(CONTEST_TIME + timedelta(hours=1)), "true"),
+                    ("https://github.com/org/app-obsidian-bob", "bob", "obsidian", TEMPLATE_SHA, github_time(CONTEST_TIME), "false")]
+        self.assertIn("\n|-", summary)
+        for output in (log, summary):
+            self.assertEqual(len(rows(output)), 2)
+            for row, cells in zip(rows(output), expected):
+                for cell in cells:
+                    self.assertIn(cell, row)
+
+    def test_contest_rehearsal_before_the_deadline_cuts_off_when_it_runs(self):
+        api = claimed()
+        update(api, FULL, ALICE, "so-far", CONTEST_TIME + timedelta(hours=1))
+        update(api, FULL, ALICE, "during-the-run", CONTEST_TIME + timedelta(hours=2, seconds=1))
+        _, log, _ = rehearsal(api, CONTEST_TIME + timedelta(hours=2), "contest")
+        [row] = rows(log)
+        self.assertIn("so-far", row)
+
+    def test_free_mode_warm_up_rehearsal_cuts_off_at_the_warm_up_deadline(self):
+        api = FakeGitHub()
+        warm_up(api, "draft", issue=3)
+        update(api, "org/app-draft-alice", ALICE, "warm-up-final", WARMUP_TIME + timedelta(hours=1))
+        update(api, "org/app-draft-alice", ALICE, "contest-work", CONTEST_TIME)
+        run(api, BOB, app="notes")
+        before = state(api)
+        issues, log, _ = rehearsal(api, CONTEST_TIME + timedelta(hours=1), "warmup", EMPTY)
+        self.assertEqual((state(api), issues.comments), (before, {}))
+        [row] = rows(log)
+        for cell in ("https://github.com/org/app-draft-alice", "warm-up-final", "true"):
+            self.assertIn(cell, row)
+
+    def test_list_mode_warm_up_rehearsal_lists_the_warm_up_projects(self):
+        api = FakeGitHub()
+        api.now = WARMUP_TIME
+        claim(api, "hello", now=WARMUP_TIME, issue=3)
+        api.now = CONTEST_TIME
+        claim(api, "excalidraw", BOB, issue=7)
+        _, log, _ = rehearsal(api, CONTEST_TIME + timedelta(hours=1), "warmup")
+        [row] = rows(log)
+        self.assertIn("https://github.com/org/app-hello-alice", row)
+
+    def test_manual_run_with_dry_run_off_freezes_the_contest(self):
+        api = claimed()
+        issues, _ = workflow_run(api, LATE, "workflow_dispatch", WINDOW="contest", DRY_RUN="false")
+        self.assertTrue(api.repos[FULL]["archived"])
+        self.assertEqual(list(issues.comments), [7])
+
+    def test_warm_up_is_never_frozen_for_real(self):
+        api = claimed()
+        claim(api, "hello", BOB, now=WARMUP_TIME, issue=3)
+        before = state(api)
+        with self.assertRaises(ValueError):
+            workflow_run(api, LATE, "workflow_dispatch", WINDOW="warmup", DRY_RUN="false")
+        self.assertEqual(state(api), before)
 
 
 if __name__ == "__main__":

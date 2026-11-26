@@ -1,5 +1,6 @@
 """Freeze the contest entries once the contest closes: record the commit each one's default branch held at the deadline,
-by GitHub's own record of the repository's ref updates, archive the repository and tell the player."""
+by GitHub's own record of the repository's ref updates, archive the repository and tell the player. A dry run rehearses
+this for the contest or the warm-up and changes nothing."""
 
 import os
 import sys
@@ -14,14 +15,14 @@ class Unfrozen(Exception):
     """The entry cannot be frozen; the message says why, for a maintainer."""
 
 
-def entries(api, org, prefix, catalog):
-    """The active contest entries that are bound to a player, with their variables."""
+def entries(api, org, prefix, catalog, warmup):
+    """The active entries of the contest, or of the warm-up, that are bound to a player, with their variables."""
     repos = active_repos(api, org)
     if catalog.projects:
-        found = candidates(api, repos, prefix, [project.id for project in catalog.projects.values() if not project.warmup])
+        found = candidates(api, repos, prefix, [project.id for project in catalog.projects.values() if project.warmup == warmup])
     else:
         found = ((repo, variables(api, repo["full_name"])) for repo in repos if repo["name"].lower().startswith(prefix.lower()))
-    return [(repo, values) for repo, values in found if "STUDENT_ID" in values and entered(catalog, repo, values)]
+    return [(repo, values) for repo, values in found if "STUDENT_ID" in values and entered(catalog, repo, values, warmup)]
 
 
 def last_update(api, repo, player, start, cutoff):
@@ -62,47 +63,69 @@ def notice(login, repo, record):
             f"仓库 {repo['html_url']} 已归档, 保持公开, 不能再推送. 有疑问请联系维护者.\n")
 
 
-def freeze(api, issues, hub, org, catalog, now, prefix=PREFIX):
+def freeze(api, issues, hub, org, catalog, now, prefix=PREFIX, rehearse=None, summary=None):
     """Once the contest has closed, record each active contest entry's default branch at the deadline, archive the
-    repository and tell its player; return the frozen URLs. Entries that cannot be frozen are left as they are, and
-    the run fails after the others."""
-    closes = catalog.contest.closes
-    if now <= closes:
+    repository and tell its player; return the URLs. With `rehearse` set to "contest" or "warmup", do none of that: cut
+    off at that phase's deadline, or now if that comes first, and only print what would be recorded. Either way, print a
+    line per entry and append a table to the `summary` file. Entries that cannot be frozen are left as they are, and the
+    run fails after the others."""
+    dry_run = rehearse is not None
+    warmup = rehearse == "warmup"
+    closes = (catalog.warmup if warmup else catalog.contest).closes
+    if not dry_run and now <= closes:
         print(f"Nothing is frozen before the contest closes at {closes.isoformat()}.")
         return []
+    cutoff = min(closes, now)
     frozen = []
+    table = []
     skipped = []
-    for repo, values in entries(api, org, prefix, catalog):
+    for repo, values in entries(api, org, prefix, catalog, warmup):
+        url = repo["html_url"]
         try:
-            record = record_of(api, catalog, repo, values, closes)
+            record = record_of(api, catalog, repo, values, cutoff)
         except Unfrozen as reason:
-            print(f"Skipped {repo['html_url']}: {reason}")
-            skipped.append(repo["html_url"])
+            print(f"Skipped {url}: {reason}")
+            skipped.append(url)
             continue
-        if "FROZEN_SHA" not in values:
-            # FROZEN_SHA marks the freeze as recorded, so it goes last: a run that stops before it works the entry out again.
-            for name, value in record.items():
-                set_variable(api, repo["full_name"], name, value)
-        api.patch("repos/" + repo["full_name"], {"archived": True})
+        if not dry_run:
+            if "FROZEN_SHA" not in values:
+                # FROZEN_SHA marks the freeze as recorded, so it goes last: a run that stops before it works the entry out again.
+                for name, value in record.items():
+                    set_variable(api, repo["full_name"], name, value)
+            api.patch("repos/" + repo["full_name"], {"archived": True})
         login = values.get("STUDENT_LOGIN")
-        print(f"Froze {repo['html_url']} of {login} ({values.get('PROJECT') or values.get('APP_NAME')}) at {record['FROZEN_SHA']}, "
-              f"pushed {record['FROZEN_PUSHED_AT']}, submitted: {record['SUBMITTED']}")
-        frozen.append(repo["html_url"])
-        if values.get("CLAIM_ISSUE"):
+        name = values.get("PROJECT") or values.get("APP_NAME")
+        sha, pushed_at, submitted = record["FROZEN_SHA"], record["FROZEN_PUSHED_AT"], record["SUBMITTED"]
+        print(f"{'Would freeze' if dry_run else 'Froze'} {url} of {login} ({name}) at {sha}, pushed {pushed_at}, submitted: {submitted}")
+        frozen.append(url)
+        table.append(f"| [{repo['name']}]({url}) | {login} | {name} | [{sha}]({url}/commit/{sha}) | {pushed_at} | {submitted} |\n")
+        if not dry_run and values.get("CLAIM_ISSUE"):
             try:
                 issues.post(f"repos/{hub}/issues/{values['CLAIM_ISSUE']}/comments", {"body": notice(login, repo, record)})
             except ApiError as error:
                 print(f"Could not tell {login} on issue #{values['CLAIM_ISSUE']}: {error}")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as file:
+            file.write(f"{'Dry run, nothing changed' if dry_run else 'Frozen'}: cut off at {cutoff.isoformat()}.\n\n"
+                       "| Repository | Player | Project | Commit | Pushed at | Submitted |\n|-|-|-|-|-|-|\n")
+            file.writelines(table)
+            file.writelines(f"\nNot frozen: {url}\n" for url in skipped)
     if skipped:
         raise ValueError("These entries were not frozen; the log above says why: " + " ".join(skipped))
     return frozen
 
 
 def main():
+    scheduled = os.environ["GITHUB_EVENT_NAME"] == "schedule"
+    dry_run = not scheduled and os.environ.get("DRY_RUN") != "false"
+    window = "contest" if scheduled else os.environ.get("WINDOW") or "contest"
+    if window == "warmup" and not dry_run:
+        raise ValueError("Only the contest is frozen for real; rehearse the warm-up with dry_run on.")
     frozen = freeze(GitHub(os.environ.get("GH_TOKEN")), GitHub(os.environ.get("ISSUE_TOKEN")),
                     os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_REPOSITORY_OWNER"], projects.load(),
-                    datetime.now(timezone.utc), os.environ.get("PREFIX") or PREFIX)
-    print(f"Froze {len(frozen)} entries.")
+                    datetime.now(timezone.utc), os.environ.get("PREFIX") or PREFIX, window if dry_run else None,
+                    os.environ.get("GITHUB_STEP_SUMMARY"))
+    print(f"{'Would freeze' if dry_run else 'Froze'} {len(frozen)} entries.")
     return 0
 
 

@@ -4,6 +4,18 @@ on:
   schedule:
     - cron: "47 * * * *"
   workflow_dispatch:
+    inputs:
+      window:
+        description: Which deadline to cut off at; the warm-up is only rehearsed
+        type: choice
+        options:
+          - contest
+          - warmup
+        default: contest
+      dry_run:
+        description: Only print what would be recorded, and change nothing
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -28,9 +40,11 @@ jobs:
           client-id: ${{ vars.ENROLL_APP_CLIENT_ID }}
           private-key: ${{ secrets.ENROLL_APP_KEY }}
           owner: ${{ github.repository_owner }}
-      - name: Record each contest entry's commit at the deadline and archive it
+      - name: Record each contest entry's commit at the deadline and archive it, or rehearse that
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.ENROLL_TOKEN }}
           ISSUE_TOKEN: ${{ github.token }}
           PREFIX: ${{ vars.PREFIX }}
+          WINDOW: ${{ inputs.window }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: python3 -u freeze.py

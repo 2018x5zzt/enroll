@@ -217,13 +217,13 @@ def release(api, full, reason, now):
     api.patch("repos/" + full, {"archived": True})
 
 
-def entered(catalog, repo, values):
-    """Whether the repository is a contest entry, which freeze.py freezes at the deadline: in list mode its PROJECT is a
-    contest project; in free mode it was made by the time the contest closed."""
+def entered(catalog, repo, values, warmup=False):
+    """Whether the repository is a contest entry, which freeze.py freezes at the deadline, or with `warmup` an entry of the
+    warm-up: in list mode its PROJECT is one of that phase's projects; in free mode it was made by the time the phase closed."""
     if catalog.projects:
         project = catalog.projects.get(values.get("PROJECT"))
-        return project is not None and not project.warmup
-    return projects.moment(repo["created_at"]) <= catalog.contest.closes
+        return project is not None and project.warmup == warmup
+    return projects.moment(repo["created_at"]) <= (catalog.warmup if warmup else catalog.contest).closes
 
 
 def give_up(api, org, opener, app, now, prefix=PREFIX, catalog=None):

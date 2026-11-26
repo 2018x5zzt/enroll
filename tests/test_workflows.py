@@ -65,6 +65,15 @@ class WorkflowTest(unittest.TestCase):
         self.assertNotIn("concurrency:", header)
         self.assertIn(QUEUE, jobs)
 
+    def test_manual_freeze_is_a_dry_run_unless_it_is_turned_off(self):
+        workflow = (WORKFLOWS / "freeze.yml").read_text(encoding="utf-8")
+        inputs = dict(re.findall(r"^      (\w+):\n((?:        .*\n)+)", workflow, re.M))
+        self.assertIn("type: boolean", inputs["dry_run"])
+        self.assertIn("default: true", inputs["dry_run"])
+        self.assertIn("          DRY_RUN: ${{ inputs.dry_run }}\n", workflow)
+        self.assertIn("default: contest", inputs["window"])
+        self.assertIn("          WINDOW: ${{ inputs.window }}\n", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,12 +10,14 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import enroll  # noqa: E402
 import freeze  # noqa: E402
 import projects  # noqa: E402
 from github import ApiError  # noqa: E402
 from test_enroll import (ALICE, BOB, CATALOG, CONTEST_TIME, EMPTY, MALLORY, ORG, TEMPLATE_SHA, WARMUP_TIME,  # noqa: E402
                          FakeGitHub, FakeIssues, claim, github_time, run, state, warm_up)
 from test_idle import STAFF  # noqa: E402
+from test_projects import entry, listing  # noqa: E402
 
 DEADLINE = CATALOG.contest.closes
 LATE = DEADLINE + timedelta(hours=1)
@@ -208,6 +210,22 @@ class FreezeTest(unittest.TestCase):
         self.assertTrue(api.repos["org/app-obsidian-bob"]["archived"])
         self.assertEqual(list(issues.comments), [8])
         self.assertIn("#7", log.getvalue())
+
+    def test_warm_up_rehearsal_lists_the_free_warm_up_repositories_while_only_contest_projects_are_listed(self):
+        catalog = projects.parse(listing(entry("excalidraw"), entry("obsidian")))
+        api = FakeGitHub()
+        warm_up(api, "draft", issue=3)
+        warm_up(api, "excalidraw", BOB, issue=4)
+        update(api, "org/app-excalidraw-bob", BOB, "warm", WARMUP_TIME + timedelta(hours=1))
+        enroll.enroll(api, ORG, BOB, "excalidraw", sleep=lambda _: None, catalog=catalog, now=CONTEST_TIME, clock=lambda: api.now)
+        _, log, _ = rehearsal(api, CONTEST_TIME + timedelta(hours=1), "warmup", catalog=catalog)
+        self.assertEqual(len(rows(log)), 2, log)
+        [draft] = [line for line in rows(log) if "app-draft-alice" in line]
+        [reused] = [line for line in rows(log) if "app-excalidraw-bob" in line]
+        self.assertIn(f"at {TEMPLATE_SHA},", draft)
+        self.assertIn("submitted: false", draft)
+        self.assertIn("at warm,", reused)
+        self.assertIn("submitted: true", reused)
 
     def test_list_mode_freezes_only_the_active_contest_claims(self):
         api = FakeGitHub()

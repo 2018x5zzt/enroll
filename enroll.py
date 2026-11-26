@@ -219,11 +219,12 @@ def release(api, full, reason, now):
 
 def entered(catalog, repo, values, warmup=False):
     """Whether the repository is a contest entry, which freeze.py freezes at the deadline, or with `warmup` an entry of the
-    warm-up: it was made by the time that phase closed, and in list mode its PROJECT is one of that phase's projects.
-    A claim opened just before the deadline can get its repository after it; with no commit of its own by then, it is no entry."""
+    warm-up: it was made by the time that phase closed, and when the list names projects of that phase, its PROJECT is one
+    of them. A claim opened just before the deadline can get its repository after it; with no commit of its own by then,
+    it is no entry."""
     if projects.moment(repo["created_at"]) > (catalog.warmup if warmup else catalog.contest).closes:
         return False
-    if catalog.projects:
+    if catalog.lists(warmup):
         project = catalog.projects.get(values.get("PROJECT"))
         return project is not None and project.warmup == warmup
     return True

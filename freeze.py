@@ -18,7 +18,7 @@ class Unfrozen(Exception):
 def entries(api, org, prefix, catalog, warmup):
     """The active entries of the contest, or of the warm-up, that are bound to a player, with their variables."""
     repos = active_repos(api, org)
-    if catalog.projects:
+    if catalog.lists(warmup):
         found = candidates(api, repos, prefix, [project.id for project in catalog.projects.values() if project.warmup == warmup])
     else:
         found = ((repo, variables(api, repo["full_name"])) for repo in repos if repo["name"].lower().startswith(prefix.lower()))
@@ -42,15 +42,16 @@ def last_update(api, repo, player, start, cutoff):
     return newest, False
 
 
-def record_of(api, catalog, repo, values, cutoff):
-    """The entry's freeze variables in the order they are written: as recorded, or else worked out at the cutoff."""
+def record_of(api, catalog, repo, values, cutoff, warmup=False):
+    """The entry's freeze variables in the order they are written: as recorded, or else worked out at the cutoff. The
+    player's own updates count from the claim when the phase was claimed from the list, else from the repository's making."""
     if "FROZEN_SHA" in values:
         try:
             return {name: values[name] for name in ("FROZEN_PUSHED_AT", "SUBMITTED", "FROZEN_SHA")}
         except KeyError as missing:
             raise Unfrozen(f"FROZEN_SHA is set but {missing} is not; delete all three to freeze it again") from None
     try:
-        start = projects.moment(values["CLAIMED_AT"] if catalog.projects else repo["created_at"])
+        start = projects.moment(values["CLAIMED_AT"] if catalog.lists(warmup) else repo["created_at"])
     except (KeyError, ValueError) as error:
         raise Unfrozen(f"CLAIMED_AT {values.get('CLAIMED_AT')!r} is not a time with a UTC offset ({error!r})") from None
     update, submitted = last_update(api, repo, values["STUDENT_ID"], start, cutoff)
@@ -85,7 +86,7 @@ def freeze(api, issues, hub, org, catalog, now, prefix=PREFIX, rehearse=None, su
     for repo, values in entries(api, org, prefix, catalog, warmup):
         url = repo["html_url"]
         try:
-            record = record_of(api, catalog, repo, values, cutoff)
+            record = record_of(api, catalog, repo, values, cutoff, warmup)
         except Unfrozen as reason:
             print(f"Skipped {url}: {reason}")
             skipped.append(url)

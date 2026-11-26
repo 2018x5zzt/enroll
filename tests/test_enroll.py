@@ -543,6 +543,34 @@ class GiveUpTest(unittest.TestCase):
         self.assertTrue(api.repos["org/app-excalidraw-alice"]["archived"])
         self.assertEqual(api.variables["org/app-excalidraw-alice"]["RELEASE_REASON"]["value"], "gave_up")
 
+    def test_contest_entry_cannot_be_given_up_after_the_deadline(self):
+        late = CATALOG.contest.closes + timedelta(seconds=1)
+        for mode, catalog, app in [("list", CATALOG, "excalidraw"), ("free", EMPTY, "notes")]:
+            with self.subTest(mode=mode):
+                api = FakeGitHub()
+                open_issue(api, form(app), catalog=catalog)
+                before = state(api)
+                issues = open_issue(api, give_up_form(app), title=enroll.GIVE_UP_TITLE, opened=late, catalog=catalog)
+                [reply] = issues.comments[7]
+                self.assertIn("正式赛已经截止", reply)
+                self.assertTrue(reply.startswith("@alice 放弃没有成功: "))
+                self.assertEqual(state(api), before)
+
+    def test_give_ups_the_freeze_does_not_need_are_accepted_after_the_deadline(self):
+        closes = CATALOG.contest.closes
+        late = closes + timedelta(seconds=1)
+        cases = [("contest project in the deadline second", CATALOG, "excalidraw", CONTEST_TIME, closes),
+                 ("warm-up project", CATALOG, "hello", WARMUP_TIME, late),
+                 ("free repository made after the deadline", EMPTY, "notes", late, late)]
+        for case, catalog, app, made, given_up in cases:
+            with self.subTest(case=case):
+                api = FakeGitHub()
+                api.now = made
+                open_issue(api, form(app), opened=made, catalog=catalog)
+                issues = open_issue(api, give_up_form(app), title=enroll.GIVE_UP_TITLE, opened=given_up, catalog=catalog)
+                self.assertEqual(issues.issue["state_reason"], "completed")
+                self.assertTrue(api.repos[f"org/app-{app}-alice"]["archived"])
+
 
 class IssueTest(unittest.TestCase):
     def test_free_name_is_accepted_while_the_list_is_empty(self):

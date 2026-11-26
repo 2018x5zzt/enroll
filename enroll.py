@@ -226,14 +226,17 @@ def entered(catalog, repo, values):
     return projects.moment(repo["created_at"]) <= catalog.contest.closes
 
 
-def give_up(api, org, opener, app, now, prefix=PREFIX):
-    """Release the opener's claim on the app; return its URL and whether this run archived it."""
+def give_up(api, org, opener, app, now, prefix=PREFIX, catalog=None):
+    """Release the opener's claim on the app; return its URL and whether this run archived it. With the catalog, a contest
+    entry is not released once the contest has closed, so that freeze.py freezes it."""
     repo = api.get(f"repos/{org}/{prefix}{app}-{opener['login']}", missing_ok=True)
     values = {} if repo is None else variables(api, repo["full_name"])
     if values.get("STUDENT_ID") != str(opener["id"]):
         raise Refusal(f"你没有领过 `{app}`: 只有领取人自己能放弃, 应用名要填领取时填的那个. 领取后改过 GitHub 用户名的, 请联系维护者.")
     if repo["archived"]:
         return repo["html_url"], False
+    if catalog is not None and now > catalog.contest.closes and entered(catalog, repo, values):
+        raise Refusal(f"正式赛已经截止, 正式赛的仓库不能再放弃. 验收用截止时 `{repo['default_branch']}` 上的提交, 机器人会把仓库归档. 有疑问请联系维护者.")
     release(api, repo["full_name"], "gave_up", now)
     return repo["html_url"], True
 
@@ -289,7 +292,7 @@ def claim_issue(api, org, issue):
 def give_up_issue(api, org, issue):
     app = app_name(issue.get("body"))
     login = issue["user"]["login"]
-    url, released = give_up(api, org, issue["user"], app, opened_at(issue), os.environ.get("PREFIX") or PREFIX)
+    url, released = give_up(api, org, issue["user"], app, opened_at(issue), os.environ.get("PREFIX") or PREFIX, catalog=projects.load())
     print(f"{login} gave up {url}" if released else f"{url} was archived already")
     if not released:
         return f"@{login} 仓库 {url} 已经归档了, 不用再放弃.\n"

@@ -2,6 +2,7 @@
 
 开发者在本仓库开 issue 领取仓库, 一个应用一个: 机器人从模板仓库 `app-template` 生成 `app-<应用名>-<GitHub 用户名>` (公开), 把它绑定到申请人的数字 GitHub ID, 保护默认分支, 再邀请申请人以 write 权限加入. 每个仓库只有领取人能推, 互相推不到对方的仓库. 作品人工审核, 这里没有自动评分.
 项目列表 `projects.json` 里有项目时, 应用名只能填列表里的项目 id, 正式赛项目同一时间只归一个人, 见「项目列表」.
+正式赛截止以后, 机器人记下每个参赛仓库截止时 `main` 上的提交, 再把仓库归档; 验收只用这个提交, 见「截止」.
 
 领取链接: `https://github.com/<组织>/enroll/issues/new/choose`.
 
@@ -16,8 +17,10 @@
 - `.github/workflows/enroll.yml`: 标题含 `领取仓库` 或 `放弃项目` 的 issue 打开时运行 `enroll.py` (机器人再按去掉首尾空格的完整标题分辨); 手动运行可填 issue 号重试.
   这些 job 排成一队, 一次只跑一个 (job 级 concurrency 组 `enroll`), 两个人不会同时领到同一个项目. 提名和别的 issue 不跑机器人.
 - `.github/workflows/idle.yml` (`Release idle claims`): 每小时运行一次 `idle.py`, 也可以手动运行; 和领取在同一个 job 级 concurrency 组里排队.
+- `.github/workflows/freeze.yml` (`Freeze at the deadline`): 每小时第 47 分钟运行一次 `freeze.py`; 手动运行默认只演练, 见「截止」. 也和领取在同一个 job 级 concurrency 组里排队.
 - `enroll.py`: 领取和放弃, 可重复运行 (中途失败重跑会接着做, 不会重复建仓库、重复邀请或重复归档).
 - `idle.py`: 收回长时间没有 push 的正式赛项目, 见「项目列表」.
+- `freeze.py`: 正式赛截止以后冻结参赛仓库, 见「截止」.
 - `projects.json`: 项目列表和两个领取时间段. `projects.py` 读它 (格式不对就报错), 也用它生成 `PROJECTS.md`.
 - `PROJECTS.md`: 给开发者看的项目列表, 由 `python3 projects.py` 生成, 不要手改. 它和 `projects.json` 对不上时测试失败.
 - `github.py`: 只用标准库的 REST 客户端 (重试、限流、刚创建的资源暂时 404).
@@ -57,11 +60,34 @@
 
   公布以后不要改 `id`: 它是仓库名的一部分, 改了已有的领取就对不上了.
 
+## 截止
+
+- 正式赛按截止时 `main` 上的版本验收. 截止以后开发者还能 push, 提交时间也能自己改, 所以 `freeze.py` 不看提交时间, 只看 GitHub 自己记录的分支更新 (`GET repos/<仓库>/activity`, 用 GitHub 服务器的时间):
+  时间不晚于 `contest.closes` 的最后一次 `main` 更新 (push 和合并 PR 都算, 不管是谁做的), 更新后 `main` 指向的提交就是这个仓库验收用的提交. 别的分支的更新不算, 截止以后的更新不算, 冻结跑得再晚也一样.
+- 参赛仓库: 没有归档、名字以 `PREFIX` 开头、有 `STUDENT_ID` 的仓库里, 列表模式下 `PROJECT` 是正式赛项目的, 自由模式下正式赛截止以前建的.
+- 记录: 机器人先在仓库上写 `FROZEN_PUSHED_AT` (那次更新的时间, GitHub 记的 UTC 时间, 比如 `2026-12-07T15:30:00Z`) 和 `SUBMITTED` (`true` 或 `false`),
+  最后写 `FROZEN_SHA` (提交的 SHA, 写了它才算记好), 然后归档仓库 (只读, 仍然公开), 再在领取 issue (`CLAIM_ISSUE`) 里 @ 开发者, 给出这个提交的链接. 验收只构建 `FROZEN_SHA`.
+  `SUBMITTED` 看开发者自己 (按 `STUDENT_ID`) 有没有更新过 `main`: 列表模式从 `CLAIMED_AT` 算起 (恢复过的领取从恢复的时间算), 自由模式从建仓库算起, 到截止为止.
+  生成仓库时机器人的提交、维护者的 push、领取以前的 push (比如热身赛时推到同一个仓库的) 都不算. 是 `false` 的, 留言里写明领取以后没有记录到他往 `main` 的 push.
+- `Freeze at the deadline` 在正式赛截止以前什么都不做; 截止以后第一次运行冻结所有参赛仓库, 以后每小时只处理还没归档的. 留言失败 (issue 删了、转走了或锁了) 只在日志里记一行, 接着处理下一个.
+  中途失败了, 下一次运行接着做: 有 `FROZEN_SHA` 的仓库不重新算, 还没归档的补上归档和留言.
+  `CLAIMED_AT` 填错或删了的, 和截止时 `main` 还没有任何更新的 (比如截止前一刻开的领取 issue, 机器人截止以后才建好仓库), 不冻结, 照样处理别的, 最后运行失败, 日志里列出这些仓库.
+  维护者改好 `CLAIMED_AT` 等下一次运行; 不算参赛的, 在仓库 Settings 里手动归档.
+- 放弃: 截止以后 (按 issue 的创建时间) 开的「放弃项目」issue, 参赛仓库一律拒绝, 回复里说正式赛已经截止. 不然开发者可以在冻结之前自己把仓库归档, 躲过冻结. 热身赛项目和截止以后才建的仓库照样能放弃.
+- 演练: 在 Actions 里手动运行 `Freeze at the deadline`, `dry_run` 默认勾着: 不写变量、不归档、不留言, 只是每个仓库打印一行 (仓库、开发者、项目或应用名、提交、推送时间、`SUBMITTED`),
+  运行页面的 Summary 里有同样的表. 真的冻结也打印这些行和这张表.
+  `window` 选 `contest` 演练正式赛; 选 `warmup` 演练热身赛, 列表模式下看 `PROJECT` 是热身赛项目的仓库, 自由模式下看热身赛截止以前建的仓库.
+  截止时间取所选时间段的 `closes`; 还没到就取运行的时刻, 表里是现在的 `main`. 热身赛结束以后选 `warmup` 跑一次, 对着表核对几个仓库的提交和 `SUBMITTED`.
+  去掉 `dry_run`、选 `contest` 就是真的冻结, 和定时运行一样, 截止以前什么都不做. 选 `warmup` 又去掉 `dry_run` 会直接失败: 热身赛只演练, 不冻结.
+- 冻结错了: 在仓库 Settings 里取消归档, 删掉变量 `FROZEN_SHA`、`FROZEN_PUSHED_AT` 和 `SUBMITTED`, 再手动运行 `Freeze at the deadline` (去掉 `dry_run`) 或等下一个小时, 机器人重新按截止时间算, 归档, 再留一次言.
+  只取消归档、留着 `FROZEN_SHA` 的, 下一个小时会按原来的记录再归档, 也会再留一次言. 要让仓库保持可写, 先在 Actions 里禁用 `Freeze at the deadline`.
+
 ## 规则
 
 - 仓库归属以仓库变量 `STUDENT_ID` (数字 ID) 为准, 用户名会变; `STUDENT_LOGIN` 每次领取时更新, `APP_NAME` 记应用名, `CLAIM_ISSUE` 记最近一次领取的 issue 号.
   列表模式下 `PROJECT` 记领的项目, `CLAIMED_AT` 记领取时间, 见「项目列表」的领取记录.
-  放弃或收回时写 `RELEASED_AT` 和 `RELEASE_REASON` (`gave_up` 或 `idle`). 开发者只有 write 权限, 改不了仓库变量, 也改不了仓库名.
+  放弃或收回时写 `RELEASED_AT` 和 `RELEASE_REASON` (`gave_up` 或 `idle`). 正式赛截止以后冻结时写 `FROZEN_PUSHED_AT`、`SUBMITTED` 和 `FROZEN_SHA`, 见「截止」.
+  开发者只有 write 权限, 改不了仓库变量, 也改不了仓库名.
 - 应用名和用户名都能含 `-`, 名字可能撞上 (`foo` + `bar-baz` 和 `foo-bar` + `baz`): 后来的人因 `STUDENT_ID` 不符被拒, 换个应用名即可.
 - 名字对上但 `STUDENT_ID` 是别人的: 拒绝 (多半是改名后用户名被别人注册). 名字对上但不是从模板生成的, 或没绑定却已有外部协作者 / 邀请: 不动, 报错给维护者.
 - 名字对上但仓库已经归档: 拒绝, 不会重新领起来.
@@ -81,9 +107,10 @@
 
 ## 运维
 
-- 失败: 机器人在 issue 里留言并保持打开, 看 Actions 日志, 修好后手动运行 `Enroll` 并填 issue 号. `Release idle claims` 失败了, 下一个小时会重跑.
+- 失败: 机器人在 issue 里留言并保持打开, 看 Actions 日志, 修好后手动运行 `Enroll` 并填 issue 号. `Release idle claims` 和 `Freeze at the deadline` 失败了, 下一个小时会重跑.
 - 正式赛开始之前: 把正式赛项目加进 `projects.json`, 热身赛期间加也行 (见「项目列表」). 建议设好 `MAX_REPOS`, 不设的话一个人可以同时领任意多个正式赛项目; 设多少由总负责人定, 现在还没定.
-- 停止领取: 在 Actions 里禁用 `Enroll` workflow. 正式赛结束后可以禁用 `Release idle claims`.
+- 演练冻结: 热身赛结束以后演练一次, 正式赛截止以前再演练一次, 见「截止」.
+- 停止领取: 在 Actions 里禁用 `Enroll` workflow. 正式赛结束后可以禁用 `Release idle claims`. 冻结完成以前不要禁用 `Freeze at the deadline`.
 - 恢复一个放弃或收回的领取: 在仓库 Settings 里取消归档, 删掉变量 `RELEASED_AT` 和 `RELEASE_REASON`; 有 `CLAIMED_AT` 的, 把它改成恢复的时间, 带时区, 比如 `2026-12-03T10:00:00+08:00`.
   收回从这个时间重新算 `IDLE_DAYS`, 恢复以前的 push 不算; 不改的话, 下一个小时又会被收回.
   填错 (没有时区、不是时间) 或删掉了, `Release idle claims` 跳过这个领取, 照样处理别的, 最后失败, 日志里列出这些仓库. 如果这期间正式赛项目已经被别人领了, 恢复后两个人同时领着, 先商量好.

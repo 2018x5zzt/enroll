@@ -45,7 +45,10 @@ def last_update(api, repo, player, start, cutoff):
 def record_of(api, catalog, repo, values, cutoff):
     """The entry's freeze variables in the order they are written: as recorded, or else worked out at the cutoff."""
     if "FROZEN_SHA" in values:
-        return {name: values[name] for name in ("FROZEN_PUSHED_AT", "SUBMITTED", "FROZEN_SHA")}
+        try:
+            return {name: values[name] for name in ("FROZEN_PUSHED_AT", "SUBMITTED", "FROZEN_SHA")}
+        except KeyError as missing:
+            raise Unfrozen(f"FROZEN_SHA is set but {missing} is not; delete all three to freeze it again") from None
     try:
         start = projects.moment(values["CLAIMED_AT"] if catalog.projects else repo["created_at"])
     except (KeyError, ValueError) as error:

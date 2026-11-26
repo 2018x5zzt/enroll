@@ -169,6 +169,21 @@ class FreezeTest(unittest.TestCase):
         [comment] = issues.comments[7]
         self.assertIn("/commit/final", comment)
 
+    def test_entry_whose_record_was_cut_by_hand_is_left_and_the_run_fails_after_the_others(self):
+        api = claimed()
+        claim(api, "obsidian", BOB, issue=8)
+        update(api, FULL, ALICE, "final", CONTEST_TIME + timedelta(hours=1))
+        sweep(api)
+        api.repos[FULL]["archived"] = api.repos["org/app-obsidian-bob"]["archived"] = False
+        del api.variables[FULL]["SUBMITTED"]
+        issues = FakeIssues()
+        with self.assertRaises(ValueError) as failure:
+            sweep(api, LATE + timedelta(hours=1), issues=issues)
+        self.assertFalse(api.repos[FULL]["archived"])
+        self.assertTrue(api.repos["org/app-obsidian-bob"]["archived"])
+        self.assertEqual(list(issues.comments), [8])
+        self.assertIn("https://github.com/org/app-excalidraw-alice", str(failure.exception))
+
     def test_rerun_works_out_an_entry_whose_record_stopped_before_the_sha(self):
         for stop in ("FROZEN_PUSHED_AT", "SUBMITTED", "FROZEN_SHA"):
             with self.subTest(stopped_at=stop):

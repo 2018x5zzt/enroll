@@ -196,7 +196,7 @@ def enroll(api, org, applicant, app, template=TEMPLATE, prefix=PREFIX, sleep=tim
     if (repo.get("template_repository") or {}).get("full_name", "").lower() != template.lower():
         raise RuntimeError(f"{full} exists but was not generated from {template}; left for a maintainer.")
     if repo["archived"]:
-        raise Refusal(f"仓库 {repo['html_url']} 已归档 (放弃了, 或者领取后一直没有 push 被收回), 不能再领. 请换一个应用名; 要恢复这个仓库请联系维护者.")
+        raise Refusal(f"仓库 {repo['html_url']} 已归档 (放弃了, 领取后一直没有 push 被收回, 或者正式赛截止后冻结了), 不能再领. 请换一个应用名; 要恢复这个仓库请联系维护者.")
 
     bind(api, full, student, sleep)
     if project is not None and not recorded:
@@ -215,6 +215,15 @@ def release(api, full, reason, now):
     set_variable(api, full, "RELEASED_AT", now.isoformat())
     set_variable(api, full, "RELEASE_REASON", reason)
     api.patch("repos/" + full, {"archived": True})
+
+
+def entered(catalog, repo, values):
+    """Whether the repository is a contest entry, which freeze.py freezes at the deadline: in list mode its PROJECT is a
+    contest project; in free mode it was made by the time the contest closed."""
+    if catalog.projects:
+        project = catalog.projects.get(values.get("PROJECT"))
+        return project is not None and not project.warmup
+    return projects.moment(repo["created_at"]) <= catalog.contest.closes
 
 
 def give_up(api, org, opener, app, now, prefix=PREFIX):

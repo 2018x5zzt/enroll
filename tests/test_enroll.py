@@ -21,6 +21,7 @@ ALICE = {"login": "alice", "id": 1, "type": "User"}
 MALLORY = {"login": "mallory", "id": 2, "type": "User"}
 BOB = {"login": "bob", "id": 11, "type": "User"}
 BOT = {"login": "enroll-bot[bot]", "id": 900}
+TEMPLATE_SHA = "template"
 BEIJING = projects.BEIJING
 WARMUP_TIME = datetime(2026, 11, 28, 12, tzinfo=BEIJING)
 CONTEST_TIME = datetime(2026, 12, 2, 12, tzinfo=BEIJING)
@@ -99,6 +100,11 @@ class FakeGitHub:
     def pages(self, path):
         yield from self.get(path)
 
+    def cursor_pages(self, path):
+        self.calls.append(("GET", path))
+        parts = path.split("?")[0].split("/")
+        yield from self.activity.get(parts[1] + "/" + parts[2], [])
+
     def post(self, path, body):
         self.calls.append(("POST", path))
         parts = path.split("/")
@@ -108,7 +114,7 @@ class FakeGitHub:
             if target in self.repos:
                 raise ApiError("POST", path, 422, "name already exists")
             self.repos[target] = self.repo(body["name"], template=full, description=body["description"])
-            self.activity[target] = [{"activity_type": "branch_creation", "ref": "refs/heads/main",
+            self.activity[target] = [{"activity_type": "branch_creation", "ref": "refs/heads/main", "after": TEMPLATE_SHA,
                                       "actor": dict(BOT), "timestamp": github_time(self.now)}]
         elif parts[3:] == ["actions", "variables"]:
             self.writable("POST", path, full)

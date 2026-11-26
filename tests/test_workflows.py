@@ -60,6 +60,11 @@ class WorkflowTest(unittest.TestCase):
                 self.assertNotIn("concurrency:", header)
                 self.assertIn(QUEUE, jobs)
 
+    def test_freeze_queues_in_the_same_group_at_the_job_level(self):
+        header, jobs = (WORKFLOWS / "freeze.yml").read_text(encoding="utf-8").split("\njobs:\n")
+        self.assertNotIn("concurrency:", header)
+        self.assertIn(QUEUE, jobs)
+
 
 if __name__ == "__main__":
     unittest.main()
